@@ -68,3 +68,10 @@
 *.vscode/
 
 .DS_Store
+
+/.vsconfig
+/ProjectSettings/MemorySettings.asset
+/ProjectSettings/MultiplayerManager.asset
+/ProjectSettings/PackageManagerSettings.asset
+/ProjectSettings/SceneTemplateSettings.json
+/ProjectSettings/VersionControlSettings.asset
