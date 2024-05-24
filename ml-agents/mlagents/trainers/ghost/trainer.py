@@ -189,10 +189,10 @@ class GhostTrainer(Trainer):
 
     def get_win_probability(self, opponent_elo: float) -> float:
         """
-        Calculates the probability of player A winning against player B given their Elo ratings.
+        Calculates the probability of winning against opponent given their Elo ratings.
 
         :param opponent_elo: Elo rating of opponent.
-        :return: Probability of player A winning against player B.
+        :return: Probability of winning against opponent.
         """
         exponent = (opponent_elo - self.current_elo) / 400
         return 1 / (1 + pow(10, exponent))
