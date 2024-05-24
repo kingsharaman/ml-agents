@@ -126,7 +126,7 @@ class GhostTrainer(Trainer):
         # to trainers properly.
         self._learning_team: int = None
         self.wrapped_trainer_team: int = None
-        self.last_save: int = 0
+        self.last_save_attempt: int = 0
         self.last_swap: int = 0
         self.last_team_change: int = 0
 
@@ -306,9 +306,12 @@ class GhostTrainer(Trainer):
 
         # Note save and swap should be on different step counters.
         # We don't want to save unless the policy is learning.
-        if self.get_step - self.last_save > self.steps_between_save:
+        if (
+            self.get_step - self.last_save_attempt > self.steps_between_save
+            and self.current_elo > np.mean(self.policy_elos[:-1])
+        ):
             self._save_snapshot()
-            self.last_save = self.get_step
+            self.last_save_attempt = self.get_step
 
         if (
             self._learning_team != next_learning_team
