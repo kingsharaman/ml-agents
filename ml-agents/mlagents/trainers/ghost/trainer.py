@@ -187,6 +187,16 @@ class GhostTrainer(Trainer):
         """
         self.policy_elos[self.current_opponent] -= change
 
+    def get_win_probability(self, opponent_elo: float) -> float:
+        """
+        Calculates the probability of player A winning against player B given their Elo ratings.
+
+        :param opponent_elo: Elo rating of opponent.
+        :return: Probability of player A winning against player B.
+        """
+        exponent = (opponent_elo - self.current_elo) / 400
+        return 1 / (1 + pow(10, exponent))
+
     def _process_trajectory(self, trajectory: Trajectory) -> None:
         """
         Determines the final result of an episode and asks the GhostController
@@ -306,16 +316,18 @@ class GhostTrainer(Trainer):
 
         # Note save and swap should be on different step counters.
         # We don't want to save unless the policy is learning.
-        if (
-            self.get_step - self.last_save_attempt > self.steps_between_save
-            and self.current_elo > np.mean(self.policy_elos[:-1])
-        ):
-            self._save_snapshot()
+        snapshot_saved = False
+        win_probabilities = [self.get_win_probability(elo) for elo in self.policy_elos[:-1]]
+        if self.get_step - self.last_save_attempt > self.steps_between_save:
+            if np.mean(win_probabilities) > 0.55:
+                self._save_snapshot()
+                snapshot_saved = True
             self.last_save_attempt = self.get_step
 
         if (
             self._learning_team != next_learning_team
             or self.ghost_step - self.last_swap > self.steps_between_swap
+            or (snapshot_saved and self.window == 1)
         ):
             self._learning_team = next_learning_team
             self._swap_snapshots()
