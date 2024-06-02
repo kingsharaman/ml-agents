@@ -118,7 +118,7 @@ class GhostTrainer(Trainer):
         # A dict from brain name to the current snapshot of this trainer's policies
         self.current_policy_snapshot: Dict[str, List[float]] = {}
 
-        self.snapshot_counter: int = 0
+        self.swap_counter: int = 0
 
         # wrapped_training_team and learning team need to be separate
         # in the situation where new agents are created destroyed
@@ -138,6 +138,9 @@ class GhostTrainer(Trainer):
         self.policy_elos: List[float] = [self.initial_elo] * (
             self.window + 1
         )  # for learning policy
+        self.policy_win_rates: List[float] = [0.5] * (
+            self.window + 1
+        )
         self.current_opponent: int = 0
 
     @property
@@ -165,6 +168,14 @@ class GhostTrainer(Trainer):
         :return: ELO of current policy
         """
         return self.policy_elos[-1]
+
+    @property
+    def current_win_rate(self) -> float:
+        """
+        Gets win rate of current policy which is always last in the list
+        :return: win rate of current policy
+        """
+        return self.policy_win_rates[-1]
 
     def change_current_elo(self, change: float) -> None:
         """
@@ -262,9 +273,14 @@ class GhostTrainer(Trainer):
 
         self._next_summary_step = self.trainer._next_summary_step
         self.trainer.advance()
-        if self.get_step - self.last_team_change > self.steps_to_train_team:
-            self.controller.change_training_team(self.get_step)
-            self.last_team_change = self.get_step
+
+        swap = False
+        if self.ghost_step - self.last_swap > self.steps_between_swap:
+            swap = True
+            self.swap_counter += 1
+            if self.swap_counter % (self.steps_to_train_team / self.steps_between_swap) == 0:
+                self.controller.change_training_team(self.get_step)
+                self.last_team_change = self.get_step
 
         next_learning_team = self.controller.get_learning_team
 
@@ -316,19 +332,9 @@ class GhostTrainer(Trainer):
 
         # Note save and swap should be on different step counters.
         # We don't want to save unless the policy is learning.
-        snapshot_saved = False
-        win_probabilities = [self.get_win_probability(elo) for elo in self.policy_elos[:-1]]
-        if self.get_step - self.last_save_attempt > self.steps_between_save:
-            if np.mean(win_probabilities) > 0.55:
-                self._save_snapshot()
-                snapshot_saved = True
-            self.last_save_attempt = self.get_step
-
-        if (
-            self._learning_team != next_learning_team
-            or self.ghost_step - self.last_swap > self.steps_between_swap
-            or (snapshot_saved and self.window == 1)
-        ):
+        if swap:
+            if self.swap_counter % self.window == 0:
+                self._maybe_save_snapshot()
             self._learning_team = next_learning_team
             self._swap_snapshots()
             self.last_swap = self.ghost_step
@@ -375,7 +381,7 @@ class GhostTrainer(Trainer):
             ] = internal_trainer_policy.get_weights()
 
             policy.load_weights(internal_trainer_policy.get_weights())
-            self._save_snapshot()  # Need to save after trainer initializes policy
+            self._maybe_save_snapshot()  # Need to save after trainer initializes policy
             self._learning_team = self.controller.get_learning_team
             self.wrapped_trainer_team = team_id
         else:
@@ -400,24 +406,41 @@ class GhostTrainer(Trainer):
         self._name_to_parsed_behavior_id[name_behavior_id] = parsed_behavior_id
         self.policies[name_behavior_id] = policy
 
-    def _save_snapshot(self) -> None:
+    def _maybe_save_snapshot(self) -> None:
         """
         Saves a snapshot of the current weights of the policy and maintains the policy_snapshots
-        according to the window size
+        according to the window size and win rates
         """
+        if len(self.policy_snapshots) < self.window:
+            snapshot_index = len(self.policy_snapshots)
+        elif np.max(self.policy_win_rates[:-1]) < 0.45:
+            snapshot_index = np.argmin(self.policy_win_rates[:-1])
+        else:
+            return
+
         for brain_name in self.current_policy_snapshot:
             current_snapshot_for_brain_name = self.current_policy_snapshot[brain_name]
 
             try:
-                self.policy_snapshots[self.snapshot_counter][
+                self.policy_snapshots[snapshot_index][
                     brain_name
                 ] = current_snapshot_for_brain_name
             except IndexError:
                 self.policy_snapshots.append(
                     {brain_name: current_snapshot_for_brain_name}
                 )
-        self.policy_elos[self.snapshot_counter] = self.current_elo
-        self.snapshot_counter = (self.snapshot_counter + 1) % self.window
+
+        old_elo = self.policy_elos[snapshot_index]
+        old_win_rate = self.policy_win_rates[snapshot_index]
+
+        self.policy_elos[snapshot_index] = self.current_elo
+        self.policy_win_rates[snapshot_index] = self.current_win_rate
+
+        logger.debug(
+            "Step {}: Replacing snapshot with id {}, ELO {}, win rate {} with team {} learning".format(
+                self.get_step, snapshot_index, old_elo, old_win_rate, self._learning_team
+            )
+        )
 
     def _swap_snapshots(self) -> None:
         """
@@ -427,12 +450,14 @@ class GhostTrainer(Trainer):
         for team_id in self._team_to_name_to_policy_queue:
             if team_id == self._learning_team:
                 continue
-            elif np.random.uniform() < (1 - self.play_against_latest_model_ratio):
-                x = np.random.randint(len(self.policy_snapshots))
-                snapshot = self.policy_snapshots[x]
             else:
-                snapshot = self.current_policy_snapshot
-                x = "current"
+                self.policy_win_rates[self.current_opponent] = 1 - self.get_win_probability(self.get_opponent_elo())
+                if np.random.uniform() < (1 - self.play_against_latest_model_ratio):
+                    x = self.swap_counter % len(self.policy_snapshots)
+                    snapshot = self.policy_snapshots[x]
+                else:
+                    snapshot = self.current_policy_snapshot
+                    x = "current"
 
             self.current_opponent = -1 if x == "current" else x
             name_to_policy_queue = self._team_to_name_to_policy_queue[team_id]
