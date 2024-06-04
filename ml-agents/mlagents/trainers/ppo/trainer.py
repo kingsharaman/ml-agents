@@ -64,6 +64,7 @@ class PPOTrainer(OnPolicyTrainer):
         self.seed = seed
         self.shared_critic = self.hyperparameters.shared_critic
         self.policy: TorchPolicy = None  # type: ignore
+        self.should_update = False
 
     def _process_trajectory(self, trajectory: Trajectory) -> None:
         """
@@ -168,6 +169,13 @@ class PPOTrainer(OnPolicyTrainer):
         return TorchPPOOptimizer(  # type: ignore
             cast(TorchPolicy, self.policy), self.trainer_settings  # type: ignore
         )  # type: ignore
+
+    def _is_ready_update(self):
+        """
+        Returns whether the trainer should run update model
+        :return: A boolean corresponding to whether or not update_model() can be run
+        """
+        return self.should_update
 
     def create_policy(
         self, parsed_behavior_id: BehaviorIdentifiers, behavior_spec: BehaviorSpec

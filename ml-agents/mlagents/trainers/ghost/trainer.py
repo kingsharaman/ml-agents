@@ -118,7 +118,7 @@ class GhostTrainer(Trainer):
         # A dict from brain name to the current snapshot of this trainer's policies
         self.current_policy_snapshot: Dict[str, List[float]] = {}
 
-        self.swap_counter: int = 0
+        self.snapshot_index: int = 0
 
         # wrapped_training_team and learning team need to be separate
         # in the situation where new agents are created destroyed
@@ -273,12 +273,13 @@ class GhostTrainer(Trainer):
 
         self._next_summary_step = self.trainer._next_summary_step
         self.trainer.advance()
+        self.trainer.should_update = False
 
         swap = False
         if self.ghost_step - self.last_swap > self.steps_between_swap:
             swap = True
-            self.swap_counter += 1
-            if self.swap_counter % (self.steps_to_train_team / self.steps_between_swap) == 0:
+            self.snapshot_index = (self.snapshot_index + 1) % len(self.policy_snapshots)
+            if self.snapshot_index == 0:
                 self.controller.change_training_team(self.get_step)
                 self.last_team_change = self.get_step
 
@@ -333,8 +334,10 @@ class GhostTrainer(Trainer):
         # Note save and swap should be on different step counters.
         # We don't want to save unless the policy is learning.
         if swap:
-            if self.swap_counter % self.window == 0:
+            self.policy_win_rates[self.current_opponent] = 1 - self.get_win_probability(self.get_opponent_elo())
+            if self.snapshot_index == 0:
                 self._maybe_save_snapshot()
+                self.trainer.should_update = True
             self._learning_team = next_learning_team
             self._swap_snapshots()
             self.last_swap = self.ghost_step
@@ -413,7 +416,7 @@ class GhostTrainer(Trainer):
         """
         if len(self.policy_snapshots) < self.window:
             snapshot_index = len(self.policy_snapshots)
-        elif np.max(self.policy_win_rates[:-1]) < 0.45:
+        elif np.max(self.policy_win_rates[:-1]) < 0.48:
             snapshot_index = np.argmin(self.policy_win_rates[:-1])
         else:
             return
@@ -451,9 +454,8 @@ class GhostTrainer(Trainer):
             if team_id == self._learning_team:
                 continue
             else:
-                self.policy_win_rates[self.current_opponent] = 1 - self.get_win_probability(self.get_opponent_elo())
                 if np.random.uniform() < (1 - self.play_against_latest_model_ratio):
-                    x = self.swap_counter % len(self.policy_snapshots)
+                    x = self.snapshot_index
                     snapshot = self.policy_snapshots[x]
                 else:
                     snapshot = self.current_policy_snapshot
